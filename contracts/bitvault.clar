@@ -353,3 +353,236 @@
         )
     )
 )
+
+;; TOKEN TRANSFER & OWNERSHIP MANAGEMENT
+
+;; Transfers fractional asset tokens between verified investors
+(define-public (transfer-asset-tokens 
+    (asset-id uint)
+    (recipient principal)
+    (token-amount uint))
+    
+    (let (
+        (sender-balance (get-token-balance tx-sender asset-id))
+        (recipient-balance (get-token-balance recipient asset-id))
+    )
+        (begin
+            ;; KYC Compliance Verification
+            (asserts! (verify-kyc-compliance tx-sender) ERR_KYC_VERIFICATION_REQUIRED)
+            (asserts! (verify-kyc-compliance recipient) ERR_KYC_VERIFICATION_REQUIRED)
+            
+            ;; Transfer Validation
+            (asserts! (> token-amount u0) ERR_ZERO_AMOUNT_TRANSFER)
+            (asserts! (>= sender-balance token-amount) ERR_INSUFFICIENT_BALANCE)
+            
+            ;; Execute Transfer
+            (map-set token-ownership-ledger
+                { holder: tx-sender, asset-id: asset-id }
+                { token-balance: (- sender-balance token-amount) }
+            )
+            
+            (map-set token-ownership-ledger
+                { holder: recipient, asset-id: asset-id }
+                { token-balance: (+ recipient-balance token-amount) }
+            )
+            
+            (ok true)
+        )
+    )
+)
+
+;; DIVIDEND DISTRIBUTION SYSTEM
+
+;; Claims proportional dividend distribution for token holders
+(define-public (claim-dividend-distribution (asset-id uint))
+    (let (
+        (asset-info (unwrap! (map-get? asset-registry { asset-id: asset-id }) ERR_ASSET_NOT_FOUND))
+        (holder-balance (get-token-balance tx-sender asset-id))
+        (claim-history (get-dividend-claim-history asset-id tx-sender))
+        (total-dividends (get total-dividend-pool asset-info))
+        (claimable-amount (calculate-dividend-entitlement holder-balance total-dividends claim-history))
+    )
+        (begin
+            ;; Validation Checks
+            (asserts! (> claimable-amount u0) ERR_INSUFFICIENT_BALANCE)
+            (asserts! (verify-kyc-compliance tx-sender) ERR_KYC_VERIFICATION_REQUIRED)
+            
+            ;; Update Claim History
+            (map-set dividend-distribution-ledger
+                { asset-id: asset-id, beneficiary: tx-sender }
+                { 
+                    total-claimed-amount: (+ claim-history claimable-amount),
+                    last-claim_block: stacks-block-height,
+                    claim-count: (+ u1 (get-claim-count asset-id tx-sender))
+                }
+            )
+            
+            ;; Note: In production, this would trigger actual STX/token transfer
+            (ok claimable-amount)
+        )
+    )
+)
+
+;; Deposits dividends into asset distribution pool (Owner only)
+(define-public (deposit-dividend-pool 
+    (asset-id uint)
+    (dividend-amount uint))
+    
+    (let ((asset-info (unwrap! (map-get? asset-registry { asset-id: asset-id }) ERR_ASSET_NOT_FOUND)))
+        (begin
+            ;; Authorization Check
+            (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_RESTRICTED_FUNCTION)
+            (asserts! (> dividend-amount u0) ERR_INVALID_TOKEN_AMOUNT)
+            
+            ;; Update Dividend Pool
+            (map-set asset-registry
+                { asset-id: asset-id }
+                (merge asset-info {
+                    total-dividend-pool: (+ (get total-dividend-pool asset-info) dividend-amount)
+                })
+            )
+            
+            (ok true)
+        )
+    )
+)
+
+;; DECENTRALIZED GOVERNANCE SYSTEM
+
+;; Creates governance proposal for asset management decisions
+(define-public (create-governance-proposal
+    (asset-id uint)
+    (proposal-title (string-ascii 256))
+    (voting-duration uint)
+    (required-quorum uint))
+    
+    (let (
+        (proposal-id (generate-next-proposal-id))
+        (proposer-balance (get-token-balance tx-sender asset-id))
+    )
+        (begin
+            ;; Validation Checks
+            (asserts! (validate-proposal-duration voting-duration) ERR_INVALID_DURATION)
+            (asserts! (validate-quorum-threshold required-quorum) ERR_INSUFFICIENT_VOTING_POWER)
+            (asserts! (validate-proposal-title proposal-title) ERR_INVALID_STRING_LENGTH)
+            
+            ;; Minimum Token Threshold Check
+            (asserts! (>= proposer-balance MIN_PROPOSAL_THRESHOLD) ERR_INSUFFICIENT_VOTING_POWER)
+            
+            ;; Create Proposal
+            (map-set governance-proposals
+                { proposal-id: proposal-id }
+                {
+                    proposal-title: proposal-title,
+                    target-asset-id: asset-id,
+                    voting-start-block: stacks-block-height,
+                    voting-end-block: (+ stacks-block-height voting-duration),
+                    execution-status: false,
+                    affirmative-votes: u0,
+                    negative-votes: u0,
+                    required-quorum: required-quorum,
+                    proposer: tx-sender
+                }
+            )
+            
+            (ok proposal-id)
+        )
+    )
+)
+
+;; Casts weighted vote on governance proposal
+(define-public (cast-governance-vote
+    (proposal-id uint)
+    (vote-affirmative bool)
+    (voting-weight uint))
+    
+    (let (
+        (proposal-info (unwrap! (map-get? governance-proposals { proposal-id: proposal-id }) ERR_PROPOSAL_NOT_FOUND))
+        (asset-id (get target-asset-id proposal-info))
+        (voter-balance (get-token-balance tx-sender asset-id))
+    )
+        (begin
+            ;; Voting Validation
+            (asserts! (<= voting-weight voter-balance) ERR_INSUFFICIENT_VOTING_POWER)
+            (asserts! (< stacks-block-height (get voting-end-block proposal-info)) ERR_VOTING_PERIOD_ENDED)
+            (asserts! (is-none (map-get? voting-records { proposal-id: proposal-id, voter-address: tx-sender })) ERR_DUPLICATE_VOTE_ATTEMPT)
+            
+            ;; Record Vote
+            (map-set voting-records
+                { proposal-id: proposal-id, voter-address: tx-sender }
+                {
+                    vote-weight: voting-weight,
+                    vote-direction: vote-affirmative,
+                    voting-block: stacks-block-height
+                }
+            )
+            
+            ;; Update Proposal Vote Tally
+            (map-set governance-proposals
+                { proposal-id: proposal-id }
+                (merge proposal-info {
+                    affirmative-votes: (if vote-affirmative 
+                        (+ (get affirmative-votes proposal-info) voting-weight)
+                        (get affirmative-votes proposal-info)
+                    ),
+                    negative-votes: (if vote-affirmative
+                        (get negative-votes proposal-info)
+                        (+ (get negative-votes proposal-info) voting-weight)
+                    )
+                })
+            )
+            
+            (ok true)
+        )
+    )
+)
+
+;; KYC COMPLIANCE & REGULATORY FUNCTIONS
+
+;; Registers KYC verification for investor (Owner/Authority only)
+(define-public (register-kyc-verification
+    (investor-address principal)
+    (compliance-level uint)
+    (verification-duration uint))
+    
+    (begin
+        ;; Authorization Check
+        (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_RESTRICTED_FUNCTION)
+        
+        ;; Validation
+        (asserts! (validate-kyc-compliance-level compliance-level) ERR_INVALID_KYC_LEVEL)
+        (asserts! (validate-expiry-timestamp (+ stacks-block-height verification-duration)) ERR_INVALID_EXPIRY_TIME)
+        
+        ;; Register KYC Status
+        (map-set kyc-compliance-registry
+            { investor-address: investor-address }
+            {
+                verification-status: true,
+                compliance-level: compliance-level,
+                verification-expiry: (+ stacks-block-height verification-duration),
+                verification-authority: tx-sender
+            }
+        )
+        
+        (ok true)
+    )
+)
+
+;; Revokes KYC verification (Emergency/Compliance function)
+(define-public (revoke-kyc-verification (investor-address principal))
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_RESTRICTED_FUNCTION)
+        
+        (map-set kyc-compliance-registry
+            { investor-address: investor-address }
+            {
+                verification-status: false,
+                compliance-level: u0,
+                verification-expiry: stacks-block-height,
+                verification-authority: tx-sender
+            }
+        )
+        
+        (ok true)
+    )
+)
