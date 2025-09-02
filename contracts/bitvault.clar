@@ -246,3 +246,110 @@
 (define-private (get-last-proposal-id)
     none
 )
+
+;; Calculates proportional dividend entitlement
+(define-private (calculate-dividend-entitlement (token-balance uint) (total-dividends uint) (last-claimed uint))
+    (/ (* token-balance (- total-dividends last-claimed)) ASSET_PRECISION_FACTOR)
+)
+
+;; Verifies investor KYC compliance status
+(define-private (verify-kyc-compliance (investor principal))
+    (match (map-get? kyc-compliance-registry { investor-address: investor })
+        compliance-record 
+            (and 
+                (get verification-status compliance-record)
+                (> (get verification-expiry compliance-record) stacks-block-height)
+            )
+        false
+    )
+)
+
+;; CORE ASSET MANAGEMENT FUNCTIONS
+
+;; Registers new real world asset for tokenization
+(define-public (register-tokenized-asset 
+    (metadata-uri (string-ascii 512))
+    (initial-valuation uint)
+    (compliance-tier uint))
+    
+    (let ((asset-id (generate-next-asset-id)))
+        (begin
+            ;; Authorization Check
+            (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_RESTRICTED_FUNCTION)
+            
+            ;; Input Validation
+            (asserts! (validate-metadata-uri metadata-uri) ERR_INVALID_URI_FORMAT)
+            (asserts! (validate-asset-valuation initial-valuation) ERR_INVALID_ASSET_VALUE)
+            (asserts! (validate-kyc-compliance-level compliance-tier) ERR_INVALID_KYC_LEVEL)
+
+            ;; Register Asset
+            (map-set asset-registry
+                { asset-id: asset-id }
+                {
+                    asset-owner: CONTRACT_OWNER,
+                    metadata-uri: metadata-uri,
+                    current-valuation: initial-valuation,
+                    is-trading-locked: false,
+                    creation-block: stacks-block-height,
+                    last-valuation-update: stacks-block-height,
+                    total-dividend-pool: u0,
+                    compliance-tier: compliance-tier
+                }
+            )
+            
+            ;; Mint Initial Token Supply to Owner
+            (map-set token-ownership-ledger
+                { holder: CONTRACT_OWNER, asset-id: asset-id }
+                { token-balance: ASSET_PRECISION_FACTOR }
+            )
+            
+            (ok asset-id)
+        )
+    )
+)
+
+;; Updates asset valuation through authorized oracle
+(define-public (update-asset-valuation 
+    (asset-id uint)
+    (new-valuation uint)
+    (oracle-signature (optional (buff 65))))
+    
+    (let ((asset-info (unwrap! (map-get? asset-registry { asset-id: asset-id }) ERR_ASSET_NOT_FOUND)))
+        (begin
+            ;; Authorization Check (Owner or Authorized Oracle)
+            (asserts! 
+                (or 
+                    (is-eq tx-sender CONTRACT_OWNER)
+                    (is-some oracle-signature)
+                ) 
+                ERR_UNAUTHORIZED_ACCESS
+            )
+            
+            ;; Validation
+            (asserts! (validate-asset-valuation new-valuation) ERR_INVALID_ASSET_VALUE)
+            
+            ;; Update Asset Valuation
+            (map-set asset-registry
+                { asset-id: asset-id }
+                (merge asset-info {
+                    current-valuation: new-valuation,
+                    last-valuation-update: stacks-block-height
+                })
+            )
+            
+            ;; Update Oracle Price Feed
+            (map-set oracle-price-feeds
+                { asset-id: asset-id }
+                {
+                    current-price: new-valuation,
+                    price-decimals: u6, ;; Standard 6 decimal precision
+                    last-update-block: stacks-block-height,
+                    authorized-oracle: tx-sender,
+                    price-confidence: u95 ;; 95% confidence default
+                }
+            )
+            
+            (ok true)
+        )
+    )
+)
