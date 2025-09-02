@@ -121,3 +121,128 @@
         verification-authority: principal
     }
 )
+
+;; Governance Proposal Registry - Manages decentralized decision making
+(define-map governance-proposals
+    { proposal-id: uint }
+    {
+        proposal-title: (string-ascii 256),
+        target-asset-id: uint,
+        voting-start-block: uint,
+        voting-end-block: uint,
+        execution-status: bool,
+        affirmative-votes: uint,
+        negative-votes: uint,
+        required-quorum: uint,
+        proposer: principal
+    }
+)
+
+;; Voting Record Tracker - Prevents double voting and tracks participation
+(define-map voting-records
+    { proposal-id: uint, voter-address: principal }
+    { 
+        vote-weight: uint,
+        vote-direction: bool,
+        voting-block: uint 
+    }
+)
+
+;; Dividend Distribution Tracker - Manages yield claim history
+(define-map dividend-distribution-ledger
+    { asset-id: uint, beneficiary: principal }
+    { 
+        total-claimed-amount: uint,
+        last-claim_block: uint,
+        claim-count: uint 
+    }
+)
+
+;; Oracle Price Feed Registry - Maintains asset valuation data
+(define-map oracle-price-feeds
+    { asset-id: uint }
+    {
+        current-price: uint,
+        price-decimals: uint,
+        last-update-block: uint,
+        authorized-oracle: principal,
+        price-confidence: uint
+    }
+)
+
+;; INPUT VALIDATION & SECURITY FUNCTIONS
+
+;; Validates asset valuation within acceptable bounds
+(define-private (validate-asset-valuation (valuation uint))
+    (and 
+        (>= valuation MIN_ASSET_VALUATION)
+        (<= valuation MAX_ASSET_VALUATION)
+    )
+)
+
+;; Ensures proposal duration meets protocol requirements
+(define-private (validate-proposal-duration (duration uint))
+    (and 
+        (>= duration MIN_PROPOSAL_DURATION)
+        (<= duration MAX_PROPOSAL_DURATION)
+    )
+)
+
+;; Verifies KYC compliance level validity
+(define-private (validate-kyc-compliance-level (level uint))
+    (<= level MAX_KYC_COMPLIANCE_LEVEL)
+)
+
+;; Checks expiry timestamp validity
+(define-private (validate-expiry-timestamp (expiry uint))
+    (and 
+        (> expiry stacks-block-height)
+        (<= (- expiry stacks-block-height) MAX_KYC_VALIDITY_PERIOD)
+    )
+)
+
+;; Validates voting quorum requirements
+(define-private (validate-quorum-threshold (vote-count uint))
+    (and 
+        (> vote-count u0)
+        (<= vote-count ASSET_PRECISION_FACTOR)
+    )
+)
+
+;; Ensures metadata URI format compliance
+(define-private (validate-metadata-uri (uri (string-ascii 512)))
+    (and 
+        (> (len uri) u0)
+        (<= (len uri) MAX_METADATA_URI_LENGTH)
+    )
+)
+
+;; Validates proposal title format
+(define-private (validate-proposal-title (title (string-ascii 256)))
+    (and 
+        (> (len title) u0)
+        (<= (len title) MAX_PROPOSAL_TITLE_LENGTH)
+    )
+)
+
+;; UTILITY & HELPER FUNCTIONS  
+
+;; Generates sequential asset identifiers
+(define-private (generate-next-asset-id)
+    (default-to u1 (get-last-registered-asset-id))
+)
+
+;; Generates sequential proposal identifiers  
+(define-private (generate-next-proposal-id)
+    (default-to u1 (get-last-proposal-id))
+)
+
+;; Placeholder for asset ID tracking (would be implemented with counters in production)
+(define-private (get-last-registered-asset-id)
+    none
+)
+
+;; Placeholder for proposal ID tracking (would be implemented with counters in production)
+(define-private (get-last-proposal-id)
+    none
+)
