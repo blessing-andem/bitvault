@@ -586,3 +586,73 @@
         (ok true)
     )
 )
+
+;; READ-ONLY QUERY FUNCTIONS
+
+;; Retrieves comprehensive asset information
+(define-read-only (get-asset-information (asset-id uint))
+    (map-get? asset-registry { asset-id: asset-id })
+)
+
+;; Gets token balance for specific holder and asset
+(define-read-only (get-token-balance (holder principal) (asset-id uint))
+    (default-to u0
+        (get token-balance
+            (map-get? token-ownership-ledger { holder: holder, asset-id: asset-id })
+        )
+    )
+)
+
+;; Retrieves governance proposal details
+(define-read-only (get-proposal-information (proposal-id uint))
+    (map-get? governance-proposals { proposal-id: proposal-id })
+)
+
+;; Gets voting record for specific proposal and voter
+(define-read-only (get-voting-record (proposal-id uint) (voter-address principal))
+    (map-get? voting-records { proposal-id: proposal-id, voter-address: voter-address })
+)
+
+;; Retrieves current price feed information
+(define-read-only (get-oracle-price-feed (asset-id uint))
+    (map-get? oracle-price-feeds { asset-id: asset-id })
+)
+
+;; Gets dividend claim history for investor
+(define-read-only (get-dividend-claim-history (asset-id uint) (beneficiary principal))
+    (default-to u0
+        (get total-claimed-amount
+            (map-get? dividend-distribution-ledger { asset-id: asset-id, beneficiary: beneficiary })
+        )
+    )
+)
+
+;; Retrieves claim count for tracking purposes
+(define-read-only (get-claim-count (asset-id uint) (beneficiary principal))
+    (default-to u0
+        (get claim-count
+            (map-get? dividend-distribution-ledger { asset-id: asset-id, beneficiary: beneficiary })
+        )
+    )
+)
+
+;; Gets KYC compliance status for investor
+(define-read-only (get-kyc-status (investor-address principal))
+    (map-get? kyc-compliance-registry { investor-address: investor-address })
+)
+
+;; Checks if proposal voting period is active
+(define-read-only (is-voting-active (proposal-id uint))
+    (match (map-get? governance-proposals { proposal-id: proposal-id })
+        proposal-info (< stacks-block-height (get voting-end-block proposal-info))
+        false
+    )
+)
+
+;; Calculates total voting participation for proposal
+(define-read-only (get-total-votes (proposal-id uint))
+    (match (map-get? governance-proposals { proposal-id: proposal-id })
+        proposal-info (+ (get affirmative-votes proposal-info) (get negative-votes proposal-info))
+        u0
+    )
+)
